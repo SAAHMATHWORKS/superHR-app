@@ -124,7 +124,7 @@ qa_chain = get_qa_chain(OPENAI_API_KEY, MONGO_URI, ATLAS_VECTOR_SEARCH_INDEX_NAM
 
 
 # --- 5. Streamlit App Interface ---
-st.title("Assistant RH - Gozem Africa 🤖")
+st.title("SuperRH - Gozem Africa 🤖")
 
 # Optional: Add a welcoming message or brief description
 st.markdown("""
