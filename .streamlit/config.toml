@@ -1,16 +1,14 @@
-# .streamlit/config.toml
-
 [theme]
-primaryColor="#FF4B4B"           # Example: A vibrant red (adjust to Gozem brand colors)
+primaryColor="#4CAF50"           # Gozem's brand green (a common vibrant green)
 backgroundColor="#F0F2F6"         # Light grey background
 secondaryBackgroundColor="#FFFFFF" # White for cards/containers
 textColor="#262730"               # Dark grey for text
-font="sans serif"                 # Options: "sans serif", "serif", "monospace"
+font="sans serif"
 
 # You can also set a custom font by URL, e.g.:
 # font = "https://fonts.googleapis.com/css2?family=Montserrat&display=swap"
 
-# Optional: Further button styling
+# Optional: Further button styling (adjust if you want buttons to be a slightly different shade of green)
 [colors]
-# button_background = "#FF6347" # Example: A slightly different red for buttons
+# button_background = "#4CAF50" # You might want a slightly darker/lighter green for button hover states
 # button_text = "#FFFFFF"

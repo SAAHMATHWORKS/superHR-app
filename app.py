@@ -16,20 +16,13 @@ load_dotenv()
 
 # --- 1. Streamlit Page Configuration (MUST be the first Streamlit command) ---
 st.set_page_config(
-    page_title="Gozem superRH",
+    page_title="Gozem RH Assistant",
     page_icon="🤖",  # An emoji as an icon
     layout="wide",   # Use "wide" for more content space
     initial_sidebar_state="expanded" # Sidebar will be expanded by default
 )
 
 # --- 2. Configuration and Secrets Management ---
-# For local development, it loads from .env.
-# For Streamlit Cloud, it will automatically pull from Streamlit Secrets.
-# Make sure your .streamlit/secrets.toml file contains these:
-# OPENAI_API_KEY="sk-..."
-# MONGO_URI="mongodb+srv://..."
-# ATLAS_VECTOR_SEARCH_INDEX_NAME="vector_index"
-
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY') or st.secrets.get('OPENAI_API_KEY')
 MONGO_URI = os.getenv('MONGO_URI') or st.secrets.get('MONGO_URI')
 ATLAS_VECTOR_SEARCH_INDEX_NAME = os.getenv('ATLAS_VECTOR_SEARCH_INDEX_NAME') or st.secrets.get('ATLAS_VECTOR_SEARCH_INDEX_NAME')
@@ -63,49 +56,37 @@ HR_PROMPT = PromptTemplate(
 
 # --- 4. Initialize MongoDB Atlas Vector Store and Embeddings (Cached) ---
 
-# Use st.cache_resource to cache expensive objects like the vector store and LLM
 @st.cache_resource
 def get_qa_chain(openai_api_key, mongo_uri, index_name):
     try:
-        # Initialize MongoDB Client
         client = MongoClient(mongo_uri)
-        db_name = "hr_rag_db" # Replace with your actual database name
-        collection_name = "hr_documents" # Replace with your actual collection name
+        db_name = "hr_rag_db"
+        collection_name = "hr_documents"
         collection = client[db_name][collection_name]
 
-        # Initialize OpenAI Embeddings for the vector store
         embedding_model = OpenAIEmbeddings(model="text-embedding-ada-002", openai_api_key=openai_api_key)
 
-        # Initialize MongoDBAtlasVectorSearch as the vector store
         vectorstore = MongoDBAtlasVectorSearch(
             collection=collection,
             embedding=embedding_model,
-            index_name=index_name,        # The name of your Atlas Vector Search index
-            text_key="text",              # Field in MongoDB that contains the text content
-            embedding_key="embedding"     # Field in MongoDB that contains the embedding vector
+            index_name=index_name,
+            text_key="text",
+            embedding_key="embedding"
         )
 
-        # Initialize LLM
         llm = ChatOpenAI(model_name="gpt-4", temperature=0.2, openai_api_key=openai_api_key)
 
-        # Initialize memory for conversational chain
         memory = ConversationBufferMemory(
             memory_key="chat_history",
             return_messages=True,
             output_key='answer'
         )
 
-        # Initialize the ConversationalRetrievalChain
         qa_chain = ConversationalRetrievalChain.from_llm(
             llm=llm,
             retriever=vectorstore.as_retriever(
                 search_type="similarity",
-                search_kwargs={
-                    "k": 5, # Retrieve top 5 most similar documents
-                    # Example of pre_filter:
-                    # "pre_filter": {"metadata.is_confidential": False}
-                    # This requires 'metadata.is_confidential' to be a 'filter' type in your Atlas index
-                }
+                search_kwargs={"k": 5}
             ),
             memory=memory,
             combine_docs_chain_kwargs={
@@ -119,93 +100,100 @@ def get_qa_chain(openai_api_key, mongo_uri, index_name):
         st.error(f"Error initializing services: {e}")
         st.stop()
 
-# Get the QA chain (cached for performance)
 qa_chain = get_qa_chain(OPENAI_API_KEY, MONGO_URI, ATLAS_VECTOR_SEARCH_INDEX_NAME)
 
 
 # --- 5. Streamlit App Interface ---
 st.title("SuperRH - Gozem Africa 🤖")
 
-# Optional: Add a welcoming message or brief description
 st.markdown("""
 Bienvenue dans votre assistant RH intelligent ! Posez vos questions sur les politiques,
 procédures et informations relatives aux ressources humaines de Gozem Africa.
 """)
 
-# --- Input Section ---
-with st.container(border=True):
-    st.markdown("#### Posez votre question :")
-    user_question = st.text_input("Tapez votre question ici :", label_visibility="collapsed", placeholder="Ex: Quelle est la politique de Gozem en matière de congés annuels ?")
-
 # Initialize chat history in session state
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# --- Main Content (Answer and Sources) ---
-# Use columns for the answer and source documents for better visual flow
-col1, col2 = st.columns([2, 1]) # 2:1 ratio for answer and sources
+# --- NEW: Callback function to handle input and clear it ---
+def handle_user_input():
+    # Get the current question from the text input widget via its key
+    user_question = st.session_state.user_question_input
 
-with col1:
-    if user_question:
+    if user_question: # Process only if the input is not empty
+        # Process the question
+        chat_history_for_chain = [(q, a) for q, a in st.session_state.chat_history]
         with st.spinner("Recherche et génération de réponse..."):
-            # LangChain expects chat_history in a specific format for ConversationalRetrievalChain
-            # (list of tuples (human_message_str, ai_message_str))
-            chat_history_for_chain = [(q, a) for q, a in st.session_state.chat_history]
-
             result = qa_chain({"question": user_question, "chat_history": chat_history_for_chain})
 
             # Update session state with the new conversation
             st.session_state.chat_history.append((user_question, result["answer"]))
+            st.session_state.last_answer = result["answer"] # Store last answer for display below
+            st.session_state.last_sources = result["source_documents"] # Store sources
+            
+        # IMPORTANT: Clear the input field in session state AFTER processing
+        st.session_state.user_question_input = ""
+    # This function doesn't return anything as it directly modifies session_state
 
+# --- Input Section ---
+with st.container(border=True):
+    st.markdown("#### Posez votre question :")
+    # --- MODIFICATION HERE: Add on_change callback ---
+    st.text_input(
+        "Tapez votre question ici :",
+        key="user_question_input", # Unique key for the text input widget
+        label_visibility="collapsed",
+        placeholder="Ex: Quelle est la politique de Gozem en matière de congés annuels ?",
+        on_change=handle_user_input # Call the function when input changes and user presses Enter
+    )
+    # The actual user_question variable that will trigger the display logic
+    # will now come from the session state after the callback runs.
+    # We will display the results based on st.session_state.last_answer
+
+# --- Main Content (Answer and Sources) ---
+col1, col2 = st.columns([2, 1])
+
+# Display the last answer and sources if available in session state
+if "last_answer" in st.session_state and st.session_state.last_answer:
+    with col1:
         st.markdown("### Réponse :")
-        # Use st.info for a visually distinct answer box
-        st.info(result["answer"])
+        st.info(st.session_state.last_answer)
 
-with col2:
-    if user_question:
+    with col2:
         with st.expander("🔎 Voir les documents sources", expanded=True):
-            if result.get("source_documents"):
+            if st.session_state.last_sources:
                 st.markdown("Ces informations sont basées sur les documents suivants :")
-                for i, doc in enumerate(result["source_documents"]):
+                for i, doc in enumerate(st.session_state.last_sources):
                     st.markdown(f"**Source Document {i+1}:**")
                     st.write(f"- Fichier: `{doc.metadata.get('source', 'Inconnue')}`")
                     st.write(f"- Page/Ligne: {doc.metadata.get('page', 'N/A')}")
                     st.write(f"- Type: `{doc.metadata.get('document_type', 'N/A')}`")
-                    # You can conditionally show confidential status if relevant for your use case
-                    # if doc.metadata.get('is_confidential'):
-                    #    st.write(f"- Confidentiel: {doc.metadata.get('is_confidential')}")
-                    st.markdown(f"```text\n{doc.page_content[:400]}...\n```") # Display snippet in a code block
+                    st.markdown(f"```text\n{doc.page_content[:400]}...\n```")
                     st.markdown("---")
             else:
                 st.write("Aucun document source pertinent trouvé.")
 
 
 # --- Conversation History ---
-st.markdown("---") # Visual separator
-with st.expander("💬 Historique de la conversation", expanded=False): # Start collapsed
+st.markdown("---")
+with st.expander("💬 Historique de la conversation", expanded=False):
     if st.session_state.chat_history:
-        # Display in reverse order for newest at top
         for i, (q, a) in enumerate(reversed(st.session_state.chat_history)):
             st.markdown(f"**Question {len(st.session_state.chat_history)-i}:**")
             st.write(q)
             st.markdown(f"**Réponse {len(st.session_state.chat_history)-i}:**")
-            st.success(a) # Use st.success for a distinct style
+            st.success(a)
             st.markdown("---")
     else:
         st.write("Commencez la conversation pour voir l'historique.")
 
 
 # --- Sidebar for additional info (optional) ---
-# --- Sidebar for additional info (optional) ---
 with st.sidebar:
-    # Use columns to center the image
-    col1, col2, col3 = st.columns([1, 2, 1]) # Adjust ratio as needed: [left_space, image_width, right_space]
-                                            # Using a 1:2:1 ratio generally works well for centering a medium-sized image
-
-    with col2: # Place the image in the middle column
-        # Make sure you have 'gozem_logo.png' in the same directory as app.py
+    col1_sb, col2_sb, col3_sb = st.columns([1, 2, 1])
+    with col2_sb:
         if os.path.exists("gozem_logo.png"):
-            st.image("gozem_logo.png", width=80) # Your original image call
+            st.image("gozem_logo.png", width=80)
         else:
             st.markdown("<h2 style='text-align: center;'>Gozem Africa</h2>", unsafe_allow_html=True)
             st.warning("Logo image 'gozem_logo.png' not found. Displaying text fallback.")
@@ -216,7 +204,7 @@ with st.sidebar:
     les employés de Gozem Africa. Il utilise les documents RH officiels
     pour fournir des réponses rapides et précises.
 
-    *Gozem AI Team*
+    *Powered by Gozem AI.*
     """)
     st.markdown("---")
     st.markdown("Pour toute question complexe ou spécifique à votre situation, veuillez contacter directement le service des Ressources Humaines.")
