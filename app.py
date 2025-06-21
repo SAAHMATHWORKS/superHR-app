@@ -16,7 +16,7 @@ load_dotenv()
 
 # --- 1. Streamlit Page Configuration (MUST be the first Streamlit command) ---
 st.set_page_config(
-    page_title="Gozem RH Assistant",
+    page_title="Gozem superRH",
     page_icon="🤖",  # An emoji as an icon
     layout="wide",   # Use "wide" for more content space
     initial_sidebar_state="expanded" # Sidebar will be expanded by default
