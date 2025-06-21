@@ -1,0 +1,17 @@
+# Core application dependencies
+streamlit
+langchain
+langchain-core
+langchain-openai
+langchain-community
+pymongo
+python-dotenv
+openai
+tiktoken
+
+# Document Loaders (based on your ingestion script)
+pypdf # For PyPDFLoader (though you used PDFPlumberLoader in the last ingest)
+pdfplumber # For PDFPlumberLoader (your chosen PDF loader)
+
+# Hidden dependencies often needed for pymongo[srv] (Atlas connections)
+dnspython
