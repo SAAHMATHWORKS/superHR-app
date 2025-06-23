@@ -10,6 +10,8 @@ from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
 from langchain_community.vectorstores import MongoDBAtlasVectorSearch
 from langchain_core.documents import Document
+from langchain_community.callbacks import StreamlitCallbackHandler # For streaming answers
+from langchain_core.messages import HumanMessage, AIMessage # For LangChain chat history format
 
 # Load environment variables (for local development)
 load_dotenv()
@@ -17,24 +19,26 @@ load_dotenv()
 # --- 1. Streamlit Page Configuration (MUST be the first Streamlit command) ---
 st.set_page_config(
     page_title="Gozem RH Assistant",
-    page_icon="🤖",  # An emoji as an icon
-    layout="wide",   # Use "wide" for more content space
-    initial_sidebar_state="expanded" # Sidebar will be expanded by default
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # --- 2. Configuration and Secrets Management ---
+# Prioritize Streamlit secrets for deployment, fall back to .env for local
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY') or st.secrets.get('OPENAI_API_KEY')
 MONGO_URI = os.getenv('MONGO_URI') or st.secrets.get('MONGO_URI')
 ATLAS_VECTOR_SEARCH_INDEX_NAME = os.getenv('ATLAS_VECTOR_SEARCH_INDEX_NAME') or st.secrets.get('ATLAS_VECTOR_SEARCH_INDEX_NAME')
 
+# Display errors and stop if critical secrets are missing
 if not OPENAI_API_KEY:
-    st.error("OpenAI API key not found. Please set it in .env or Streamlit secrets.")
+    st.error("OpenAI API key not found. Please set it in your environment variables or Streamlit secrets.")
     st.stop()
 if not MONGO_URI:
-    st.error("MongoDB URI not found. Please set it in .env or Streamlit secrets.")
+    st.error("MongoDB URI not found. Please set it in your environment variables or Streamlit secrets.")
     st.stop()
 if not ATLAS_VECTOR_SEARCH_INDEX_NAME:
-    st.error("Atlas Vector Search Index Name not found. Please set it in .env or Streamlit secrets.")
+    st.error("Atlas Vector Search Index Name not found. Please set it in your environment variables or Streamlit secrets.")
     st.stop()
 
 # --- 3. HR Prompt in French ---
@@ -55,7 +59,7 @@ HR_PROMPT = PromptTemplate(
 )
 
 # --- 4. Initialize MongoDB Atlas Vector Store and Embeddings (Cached) ---
-
+# @st.cache_resource ensures this function runs only once across reruns
 @st.cache_resource
 def get_qa_chain(openai_api_key, mongo_uri, index_name):
     try:
@@ -74,8 +78,10 @@ def get_qa_chain(openai_api_key, mongo_uri, index_name):
             embedding_key="embedding"
         )
 
-        llm = ChatOpenAI(model_name="gpt-4", temperature=0.2, openai_api_key=openai_api_key)
+        # Initialize LLM with streaming=True for token-by-token output
+        llm = ChatOpenAI(model_name="gpt-4", temperature=0.2, openai_api_key=openai_api_key, streaming=True)
 
+        # ConversationBufferMemory for LangChain's internal chat history management
         memory = ConversationBufferMemory(
             memory_key="chat_history",
             return_messages=True,
@@ -88,11 +94,11 @@ def get_qa_chain(openai_api_key, mongo_uri, index_name):
                 search_type="similarity",
                 search_kwargs={"k": 5}
             ),
-            memory=memory,
+            memory=memory, # Pass memory for internal LangChain history
             combine_docs_chain_kwargs={
                 "prompt": HR_PROMPT.partial(company_name="Gozem Africa")
             },
-            return_source_documents=True
+            return_source_documents=True # Still retrieve and return source documents
         )
 
         return qa_chain
@@ -100,10 +106,11 @@ def get_qa_chain(openai_api_key, mongo_uri, index_name):
         st.error(f"Error initializing services: {e}")
         st.stop()
 
+# Get the RAG chain instance
 qa_chain = get_qa_chain(OPENAI_API_KEY, MONGO_URI, ATLAS_VECTOR_SEARCH_INDEX_NAME)
 
 
-# --- 5. Streamlit App Interface ---
+# --- 5. Streamlit App Interface (Chat-based UX) ---
 st.title("SuperRH - Gozem Africa 🤖")
 
 st.markdown("""
@@ -111,87 +118,97 @@ Bienvenue dans votre assistant RH intelligent ! Posez vos questions sur les poli
 procédures et informations relatives aux ressources humaines de Gozem Africa.
 """)
 
-# Initialize chat history in session state
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
+# Initialize chat history in Streamlit's session state
+# Each message is a dictionary: {"role": "user" or "assistant", "content": "message", "sources": [Document objects]}
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-# --- NEW: Callback function to handle input and clear it ---
-def handle_user_input():
-    # Get the current question from the text input widget via its key
-    user_question = st.session_state.user_question_input
-
-    if user_question: # Process only if the input is not empty
-        # Process the question
-        chat_history_for_chain = [(q, a) for q, a in st.session_state.chat_history]
-        with st.spinner("Recherche et génération de réponse..."):
-            result = qa_chain({"question": user_question, "chat_history": chat_history_for_chain})
-
-            # Update session state with the new conversation
-            st.session_state.chat_history.append((user_question, result["answer"]))
-            st.session_state.last_answer = result["answer"] # Store last answer for display below
-            st.session_state.last_sources = result["source_documents"] # Store sources
-            
-        # IMPORTANT: Clear the input field in session state AFTER processing
-        st.session_state.user_question_input = ""
-    # This function doesn't return anything as it directly modifies session_state
-
-# --- Input Section ---
-with st.container(border=True):
-    st.markdown("#### Posez votre question :")
-    # --- MODIFICATION HERE: Add on_change callback ---
-    st.text_input(
-        "Tapez votre question ici :",
-        key="user_question_input", # Unique key for the text input widget
-        label_visibility="collapsed",
-        placeholder="Ex: Quelle est la politique de Gozem en matière de congés annuels ?",
-        on_change=handle_user_input # Call the function when input changes and user presses Enter
-    )
-    # The actual user_question variable that will trigger the display logic
-    # will now come from the session state after the callback runs.
-    # We will display the results based on st.session_state.last_answer
-
-# --- Main Content (Answer and Sources) ---
-col1, col2 = st.columns([2, 1])
-
-# Display the last answer and sources if available in session state
-if "last_answer" in st.session_state and st.session_state.last_answer:
-    with col1:
-        st.markdown("### Réponse :")
-        st.info(st.session_state.last_answer)
-
-    with col2:
-        with st.expander("🔎 Voir les documents sources", expanded=True):
-            if st.session_state.last_sources:
+# Display previous chat messages
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+        # If it's an assistant message and has sources, display them in a collapsed expander
+        if message["role"] == "assistant" and message.get("sources"):
+            with st.expander("🔎 Voir les documents sources"): # This expander is for sources ONLY, defaults to collapsed
                 st.markdown("Ces informations sont basées sur les documents suivants :")
-                for i, doc in enumerate(st.session_state.last_sources):
+                for i, doc in enumerate(message["sources"]):
+                    st.markdown(f"**Source Document {i+1}:**")
+                    st.write(f"- Fichier: `{doc.metadata.get('source', 'Inconnue')}`")
+                    st.write(f"- Page/Ligne: {doc.metadata.get('page', 'N/A')}")
+                    st.write(f"- Type: `{doc.metadata.get('document_type', 'N/A')}`")
+                    # Display a snippet of the document content
+                    st.markdown(f"```text\n{doc.page_content[:400]}...\n```")
+                    st.markdown("---")
+
+# Use st.chat_input for new user messages – it automatically clears after submission
+if user_question := st.chat_input("Posez votre question RH ici :"):
+    # Add user message to the session's chat history for display
+    st.session_state.messages.append({"role": "user", "content": user_question})
+
+    # Display the user's message immediately in the chat UI
+    with st.chat_message("user"):
+        st.markdown(user_question)
+
+    # Prepare chat history for LangChain (it expects HumanMessage/AIMessage objects)
+    langchain_chat_history = []
+    for msg in st.session_state.messages[:-1]: # Exclude the very last user message
+        if msg["role"] == "user":
+            langchain_chat_history.append(HumanMessage(content=msg["content"]))
+        elif msg["role"] == "assistant":
+            langchain_chat_history.append(AIMessage(content=msg["content"]))
+
+    # Prepare for assistant's streaming response
+    with st.chat_message("assistant"):
+        # This message_placeholder will stream the answer directly. NO expander here.
+        message_placeholder = st.empty()
+        full_response_content = ""
+        sources = []
+
+        with st.spinner("Recherche et génération de réponse..."):
+            try:
+                # Initialize StreamlitCallbackHandler to stream output to the placeholder
+                st_callback = StreamlitCallbackHandler(message_placeholder)
+
+                result = qa_chain.invoke(
+                    {"question": user_question, "chat_history": langchain_chat_history},
+                    config={"callbacks": [st_callback]} # Pass the callback here
+                )
+                full_response_content = result["answer"]
+                sources = result["source_documents"]
+
+            except Exception as e:
+                full_response_content = f"Désolé, une erreur est survenue lors de la génération de la réponse : {e}"
+                st.error(full_response_content)
+
+        # --- FIX: Ensure final content is displayed after spinner ---
+        # Explicitly update the placeholder with the final, full content
+        # after the spinner is gone and result is complete.
+        message_placeholder.markdown(full_response_content)
+        # --- END FIX ---
+
+        # After streaming is complete, add the full response and sources to session state
+        st.session_state.messages.append({"role": "assistant", "content": full_response_content, "sources": sources})
+
+        # Display source documents in an expander below the streamed answer
+        # This expander is now only for the sources and is collapsed by default.
+        if sources:
+            with st.expander("🔎 Voir les documents sources"): # Defaults to collapsed (expanded=False)
+                st.markdown("Ces informations sont basées sur les documents suivants :")
+                for i, doc in enumerate(sources):
                     st.markdown(f"**Source Document {i+1}:**")
                     st.write(f"- Fichier: `{doc.metadata.get('source', 'Inconnue')}`")
                     st.write(f"- Page/Ligne: {doc.metadata.get('page', 'N/A')}")
                     st.write(f"- Type: `{doc.metadata.get('document_type', 'N/A')}`")
                     st.markdown(f"```text\n{doc.page_content[:400]}...\n```")
                     st.markdown("---")
-            else:
-                st.write("Aucun document source pertinent trouvé.")
 
 
-# --- Conversation History ---
-st.markdown("---")
-with st.expander("💬 Historique de la conversation", expanded=False):
-    if st.session_state.chat_history:
-        for i, (q, a) in enumerate(reversed(st.session_state.chat_history)):
-            st.markdown(f"**Question {len(st.session_state.chat_history)-i}:**")
-            st.write(q)
-            st.markdown(f"**Réponse {len(st.session_state.chat_history)-i}:**")
-            st.success(a)
-            st.markdown("---")
-    else:
-        st.write("Commencez la conversation pour voir l'historique.")
-
-
-# --- Sidebar for additional info (optional) ---
+# --- Sidebar for additional info ---
 with st.sidebar:
+    # Use columns to center the image
     col1_sb, col2_sb, col3_sb = st.columns([1, 2, 1])
-    with col2_sb:
+    with col2_sb: # Place the image in the middle column
+        # Make sure you have 'gozem_logo.png' in the same directory as app.py
         if os.path.exists("gozem_logo.png"):
             st.image("gozem_logo.png", width=80)
         else:
