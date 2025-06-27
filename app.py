@@ -111,7 +111,7 @@ qa_chain = get_qa_chain(OPENAI_API_KEY, MONGO_URI, ATLAS_VECTOR_SEARCH_INDEX_NAM
 
 
 # --- 5. Streamlit App Interface (Chat-based UX) ---
-st.title("SuperRH - Gozem Africa 🤖")
+st.title("supeRH - Gozem Africa 🤖")
 
 st.markdown("""
 Bienvenue dans votre assistant RH intelligent ! Posez vos questions sur les politiques,
