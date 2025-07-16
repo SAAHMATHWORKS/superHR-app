@@ -80,7 +80,7 @@ def get_qa_chain(openai_api_key, mongo_uri, index_name):
         )
 
         # Initialize LLM with streaming=True for token-by-token output
-        llm = ChatOpenAI(model_name="GPT-4o mini", temperature=0.2, openai_api_key=openai_api_key, streaming=True)
+        llm = ChatOpenAI(model_name="gpt-4o", temperature=0.2, openai_api_key=openai_api_key, streaming=True)
 
         # ConversationBufferMemory for LangChain's internal chat history management
         memory = ConversationBufferMemory(
